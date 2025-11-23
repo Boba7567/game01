@@ -87,7 +87,7 @@
         masterGain.connect(audioCtx.destination);
 
         if (type === 'jump') {
-            // 羽音（バサッ）
+            // 羽音
             const bufferSize = audioCtx.sampleRate * 0.2;
             const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
             const data = buffer.getChannelData(0);
@@ -101,7 +101,7 @@
             noise.start(now); noise.stop(now + 0.2);
 
         } else if (type === 'score') {
-            // 小鼓（ポンッ）
+            // 小鼓
             const osc = audioCtx.createOscillator(); osc.type = 'sine';
             osc.frequency.setValueAtTime(450, now); osc.frequency.exponentialRampToValueAtTime(600, now + 0.05); 
             osc.frequency.exponentialRampToValueAtTime(300, now + 0.2); 
@@ -114,7 +114,7 @@
             osc.start(now); osc.stop(now + 0.25); clickOsc.start(now); clickOsc.stop(now + 0.1);
 
         } else if (type === 'highscore') {
-            // 琴（ジャラララ〜ン）
+            // 琴
             const pentatonic = [523.25, 587.33, 659.25, 783.99, 880.00, 1046.50, 1174.66, 1318.51, 1567.98];
             pentatonic.forEach((freq, i) => {
                 const startTime = now + i * 0.06; const osc = audioCtx.createOscillator(); osc.type = 'triangle'; osc.frequency.value = freq;
@@ -126,7 +126,7 @@
             masterGain.gain.value = 1.0;
 
         } else if (type === 'hit') {
-            // 梵鐘（ゴォォン…）
+            // 梵鐘
             masterGain.gain.setValueAtTime(0.5, now); masterGain.gain.exponentialRampToValueAtTime(0.001, now + 4.0);
             const baseFreq = 160; const harmonics = [1, 1.3, 1.7, 2.5, 3.8]; const gains = [1, 0.6, 0.4, 0.2, 0.1];
             harmonics.forEach((h, i) => {
@@ -137,14 +137,14 @@
             });
 
         } else if (type === 'splash') {
-            // 水音（チャポン！）：音量大きめ
+            // 水音
             const bufferSize = audioCtx.sampleRate * 0.4;
             const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
             const data = buffer.getChannelData(0);
             for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * 0.8; 
             const noise = audioCtx.createBufferSource(); noise.buffer = buffer;
             const filter = audioCtx.createBiquadFilter(); filter.type = 'lowpass';
-            filter.frequency.setValueAtTime(1200, now); filter.frequency.exponentialRampToValueAtTime(200, now + 0.3);
+            filter.frequency.setValueAtTime(1500, now); filter.frequency.exponentialRampToValueAtTime(200, now + 0.3);
             const gain = audioCtx.createGain();
             gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(1.0, now + 0.02); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
             noise.connect(filter); filter.connect(gain); gain.connect(masterGain);
@@ -152,12 +152,13 @@
         }
     }
 
-    // --- ゲーム設定とスケーリング ---
+    // --- ゲーム設定 ---
+    // もっさり解消のため、ベーススピードと重力を少し強化
     const BASE_CONFIG = {
-        gravity: 0.6,
-        jumpStrength: -9,
-        speed: 3,
-        pipeSpawnRate: 140,
+        gravity: 0.7, // 0.6 -> 0.7 (キビキビさせる)
+        jumpStrength: -9.5,
+        speed: 4.2,   // 3.0 -> 4.2 (疾走感アップ)
+        pipeSpawnRate: 140, 
         pipeGap: 190,
         pipeWidth: 70,
         birdSize: 20
@@ -167,13 +168,22 @@
     let gameScale = 1.0;
 
     const canvas = document.getElementById('gameCanvas'); const ctx = canvas.getContext('2d');
+    // 高速描画用のオフスクリーンキャンバス（背景キャッシュ用）
+    const bgCanvas = document.createElement('canvas'); const bgCtx = bgCanvas.getContext('2d');
+
     const scoreDisplay=document.getElementById('score-display'); const startScreen=document.getElementById('start-screen');
     const resultScreen=document.getElementById('result-screen'); const finalScoreEl=document.getElementById('final-score');
     const bestScoreEl=document.getElementById('best-score'); const newRecordEl=document.getElementById('new-record');
     const retryBtn=document.getElementById('retry-btn');
     let frames=0, score=0, state='START', width, height;
-    let bestScore = localStorage.getItem('flappyToriiBest') || 0; // キー名変更
+    let bestScore = localStorage.getItem('flappyToriiBest') || 0;
     let groundOffset = 0; let sakuraParticles = [];
+
+    // 時間管理用変数 (Delta Time)
+    let lastTime = 0;
+    let accumulator = 0;
+    const TARGET_FPS = 60;
+    const STEP = 1000 / TARGET_FPS;
 
     class Sakura {
         constructor() { this.reset(); }
@@ -184,8 +194,10 @@
             this.speedY = (Math.random() + 0.5) * gameScale;
             this.rotation = Math.random() * Math.PI * 2; this.rotationSpeed = Math.random() * 0.05 - 0.025;
         }
-        update() {
-            this.x += this.speedX; this.y += this.speedY; this.rotation += this.rotationSpeed;
+        update(dt) { // dtを使って移動量を正規化
+            this.x += this.speedX * dt; 
+            this.y += this.speedY * dt; 
+            this.rotation += this.rotationSpeed * dt;
             if (this.y > height) this.reset();
         }
         draw() {
@@ -202,11 +214,15 @@
         height = window.innerHeight;
         canvas.width = width; 
         canvas.height = height;
+        
+        // 背景用キャンバスもリサイズ
+        bgCanvas.width = width;
+        bgCanvas.height = height;
 
         const baseWidth = 400;
         gameScale = Math.min(width, height) / baseWidth;
         if (gameScale < 0.8) gameScale = 0.8; 
-        if (gameScale > 2.0) gameScale = 2.0;
+        if (gameScale > 1.5) gameScale = 1.5; // iPad向けにスケールしすぎないよう制限（相対的に速く感じるように）
 
         CONFIG.gravity = BASE_CONFIG.gravity * gameScale;
         CONFIG.jumpStrength = BASE_CONFIG.jumpStrength * gameScale;
@@ -223,42 +239,47 @@
         }
         
         sakuraParticles = []; for(let i=0; i<30; i++) sakuraParticles.push(new Sakura());
+        
+        // 背景をキャッシュに描画（毎フレームの負荷を減らす）
+        renderStaticBackground();
     }
     window.addEventListener('resize', resize);
 
-    // --- 描画関数 ---
-    function drawBackground() {
-        const grad = ctx.createLinearGradient(0, 0, 0, height);
+    // --- 静的背景の事前描画（高速化の肝） ---
+    function renderStaticBackground() {
+        const grad = bgCtx.createLinearGradient(0, 0, 0, height);
         grad.addColorStop(0, '#1a2a6c'); grad.addColorStop(0.6, '#b21f1f'); grad.addColorStop(1, '#fdbb2d');
-        ctx.fillStyle = grad; ctx.fillRect(0, 0, width, height);
+        bgCtx.fillStyle = grad; bgCtx.fillRect(0, 0, width, height);
+        
         const mountainY = height - CONFIG.groundHeight;
         const fujiCenterX = width * 0.5; const fujiHeight = height * 0.35; const fujiWidth = width * 0.8;
-        ctx.fillStyle = '#2c3e50'; 
-        ctx.beginPath(); ctx.moveTo(fujiCenterX - fujiWidth/2, mountainY);
-        ctx.bezierCurveTo(fujiCenterX - fujiWidth/4, mountainY - fujiHeight*0.5, fujiCenterX, mountainY - fujiHeight, fujiCenterX, mountainY - fujiHeight);
-        ctx.bezierCurveTo(fujiCenterX, mountainY - fujiHeight, fujiCenterX + fujiWidth/4, mountainY - fujiHeight*0.5, fujiCenterX + fujiWidth/2, mountainY);
-        ctx.closePath(); ctx.fill();
-        ctx.fillStyle = '#fffaf0';
-        ctx.beginPath(); ctx.moveTo(fujiCenterX, mountainY - fujiHeight);
-        ctx.lineTo(fujiCenterX + fujiWidth*0.1, mountainY - fujiHeight*0.8);
-        ctx.lineTo(fujiCenterX + fujiWidth*0.05, mountainY - fujiHeight*0.75);
-        ctx.lineTo(fujiCenterX, mountainY - fujiHeight*0.85);
-        ctx.lineTo(fujiCenterX - fujiWidth*0.05, mountainY - fujiHeight*0.75);
-        ctx.lineTo(fujiCenterX - fujiWidth*0.1, mountainY - fujiHeight*0.8);
-        ctx.closePath(); ctx.fill();
-        ctx.fillStyle = 'rgba(255, 250, 240, 0.3)';
-        ctx.beginPath(); ctx.moveTo(0, mountainY-50);
-        ctx.bezierCurveTo(width/3, mountainY-100, width*2/3, mountainY, width, mountainY-50);
-        ctx.lineTo(width, mountainY); ctx.lineTo(0, mountainY); ctx.fill();
-        sakuraParticles.forEach(p => { p.update(); p.draw(); });
+        bgCtx.fillStyle = '#2c3e50'; 
+        bgCtx.beginPath(); bgCtx.moveTo(fujiCenterX - fujiWidth/2, mountainY);
+        bgCtx.bezierCurveTo(fujiCenterX - fujiWidth/4, mountainY - fujiHeight*0.5, fujiCenterX, mountainY - fujiHeight, fujiCenterX, mountainY - fujiHeight);
+        bgCtx.bezierCurveTo(fujiCenterX, mountainY - fujiHeight, fujiCenterX + fujiWidth/4, mountainY - fujiHeight*0.5, fujiCenterX + fujiWidth/2, mountainY);
+        bgCtx.closePath(); bgCtx.fill();
+        bgCtx.fillStyle = '#fffaf0';
+        bgCtx.beginPath(); bgCtx.moveTo(fujiCenterX, mountainY - fujiHeight);
+        bgCtx.lineTo(fujiCenterX + fujiWidth*0.1, mountainY - fujiHeight*0.8);
+        bgCtx.lineTo(fujiCenterX + fujiWidth*0.05, mountainY - fujiHeight*0.75);
+        bgCtx.lineTo(fujiCenterX, mountainY - fujiHeight*0.85);
+        bgCtx.lineTo(fujiCenterX - fujiWidth*0.05, mountainY - fujiHeight*0.75);
+        bgCtx.lineTo(fujiCenterX - fujiWidth*0.1, mountainY - fujiHeight*0.8);
+        bgCtx.closePath(); bgCtx.fill();
+        bgCtx.fillStyle = 'rgba(255, 250, 240, 0.3)';
+        bgCtx.beginPath(); bgCtx.moveTo(0, mountainY-50);
+        bgCtx.bezierCurveTo(width/3, mountainY-100, width*2/3, mountainY, width, mountainY-50);
+        bgCtx.lineTo(width, mountainY); bgCtx.lineTo(0, mountainY); bgCtx.fill();
     }
 
-    function drawGround() {
+    function drawGround(dt) { // dt対応
         const gh = CONFIG.groundHeight; const gy = height - gh;
         const waterGrad = ctx.createLinearGradient(0, gy, 0, height);
         waterGrad.addColorStop(0, '#3a5f78'); waterGrad.addColorStop(1, '#1b2a40');
         ctx.fillStyle = waterGrad; ctx.fillRect(0, gy, width, gh);
-        if (state === 'PLAYING') groundOffset = (groundOffset + CONFIG.speed * 0.8) % (100 * gameScale);
+        
+        // dtを使ってスクロール量を計算
+        if (state === 'PLAYING') groundOffset = (groundOffset + (CONFIG.speed * 0.8) * dt) % (100 * gameScale);
         
         ctx.strokeStyle = 'rgba(255, 250, 240, 0.2)'; 
         ctx.lineWidth = 2 * gameScale; 
@@ -308,9 +329,10 @@
             ctx.fill();
             ctx.restore();
         },
-        update() {
-            this.velocity += CONFIG.gravity; 
-            this.y += this.velocity;
+        update(dt) {
+            // dtを使った物理計算
+            this.velocity += CONFIG.gravity * dt; 
+            this.y += this.velocity * dt;
             if(this.y + this.r >= height - CONFIG.groundHeight) gameOver('water');
         },
         jump() { this.velocity = CONFIG.jumpStrength; playSound('jump'); }
@@ -343,7 +365,9 @@
 
     const pipes = {
         items:[], reset(){this.items=[]},
-        update() {
+        update(dt) {
+            // スポーンタイミングの管理（dtベース）
+            // ここは簡易的にフレームカウントのままにするが、移動はdtを使う
             if(frames % CONFIG.pipeSpawnRate === 0){
                 const groundY = height - CONFIG.groundHeight; 
                 const minH = 90 * gameScale; 
@@ -353,10 +377,9 @@
             }
             for(let i=0; i<this.items.length; i++){
                 let p=this.items[i]; 
-                p.x -= CONFIG.speed; 
+                p.x -= CONFIG.speed * dt; // dt対応
                 let bottomY = p.h + CONFIG.pipeGap;
                 
-                // 衝突判定（スケール対応）
                 const padding = 15 * gameScale;
                 if(bird.x + bird.r > p.x + padding && 
                    bird.x - bird.r < p.x + p.w - padding && 
@@ -376,18 +399,45 @@
         }
     };
 
-    function loop() {
-        ctx.clearRect(0,0,width,height); drawBackground();
-        if(state==='PLAYING'){pipes.update();bird.update();frames++;}
-        pipes.draw(); drawGround(); if(state!=='START')bird.draw();
+    // --- メインループ (Delta Time 対応) ---
+    function loop(timestamp) {
+        // Delta Time計算
+        if (!lastTime) lastTime = timestamp;
+        const deltaTimeMs = timestamp - lastTime;
+        lastTime = timestamp;
+        
+        // 60FPSを基準(1.0)とした係数。120Hzなら0.5になる。
+        const dt = deltaTimeMs / (1000 / 60);
+
+        // 描画
+        ctx.clearRect(0, 0, width, height);
+        // 背景はキャッシュから描画（高速化）
+        ctx.drawImage(bgCanvas, 0, 0);
+        
+        // 桜は動かす
+        sakuraParticles.forEach(p => { p.update(dt); p.draw(); });
+
+        if(state==='PLAYING'){
+            pipes.update(dt);
+            bird.update(dt);
+            frames++;
+        }
+        
+        pipes.draw(); 
+        drawGround(dt); // 地面もdt対応
+        if(state!=='START') bird.draw();
+        
         requestAnimationFrame(loop);
     }
+
     function startGame() {
         state='PLAYING'; bird.y=height/3; bird.velocity=0; pipes.reset();
         score=0; scoreDisplay.innerText=score; scoreDisplay.style.display='block';
         startScreen.style.display='none'; resultScreen.style.display='none';
         frames=0; resumeAudio(); sakuraParticles.forEach(p=>p.reset());
+        lastTime = 0; // タイマーリセット
     }
+    
     function gameOver(cause) {
         if(state!=='GAMEOVER'){
             state='GAMEOVER'; 
@@ -414,7 +464,7 @@
     // 初回実行
     resize(); 
     bird.x=width*0.3; 
-    loop();
+    requestAnimationFrame(loop); // loop開始
 </script>
 </body>
 </html>
