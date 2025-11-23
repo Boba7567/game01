@@ -76,7 +76,7 @@
 </div>
 
 <script>
-    // --- 音響設定 (Web Audio API) ---
+    // --- 音響設定 ---
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     function resumeAudio() { if (audioCtx.state === 'suspended') audioCtx.resume(); }
     
@@ -152,14 +152,14 @@
         }
     }
 
-    // --- ゲーム設定 ---
-    // もっさり解消のため、ベーススピードと重力を少し強化
+    // --- ゲーム設定（難易度調整版） ---
     const BASE_CONFIG = {
-        gravity: 0.7, // 0.6 -> 0.7 (キビキビさせる)
+        gravity: 0.7,
         jumpStrength: -9.5,
-        speed: 4.2,   // 3.0 -> 4.2 (疾走感アップ)
-        pipeSpawnRate: 140, 
-        pipeGap: 190,
+        speed: 4.2,
+        // 【修正】間隔を狭く、頻度を上げる
+        pipeSpawnRate: 115, // 140 -> 115 (頻繁に出現)
+        pipeGap: 150,       // 190 -> 150 (隙間を狭く)
         pipeWidth: 70,
         birdSize: 20
     };
@@ -168,7 +168,6 @@
     let gameScale = 1.0;
 
     const canvas = document.getElementById('gameCanvas'); const ctx = canvas.getContext('2d');
-    // 高速描画用のオフスクリーンキャンバス（背景キャッシュ用）
     const bgCanvas = document.createElement('canvas'); const bgCtx = bgCanvas.getContext('2d');
 
     const scoreDisplay=document.getElementById('score-display'); const startScreen=document.getElementById('start-screen');
@@ -179,11 +178,7 @@
     let bestScore = localStorage.getItem('flappyToriiBest') || 0;
     let groundOffset = 0; let sakuraParticles = [];
 
-    // 時間管理用変数 (Delta Time)
     let lastTime = 0;
-    let accumulator = 0;
-    const TARGET_FPS = 60;
-    const STEP = 1000 / TARGET_FPS;
 
     class Sakura {
         constructor() { this.reset(); }
@@ -194,7 +189,7 @@
             this.speedY = (Math.random() + 0.5) * gameScale;
             this.rotation = Math.random() * Math.PI * 2; this.rotationSpeed = Math.random() * 0.05 - 0.025;
         }
-        update(dt) { // dtを使って移動量を正規化
+        update(dt) { 
             this.x += this.speedX * dt; 
             this.y += this.speedY * dt; 
             this.rotation += this.rotationSpeed * dt;
@@ -214,15 +209,13 @@
         height = window.innerHeight;
         canvas.width = width; 
         canvas.height = height;
-        
-        // 背景用キャンバスもリサイズ
         bgCanvas.width = width;
         bgCanvas.height = height;
 
         const baseWidth = 400;
         gameScale = Math.min(width, height) / baseWidth;
         if (gameScale < 0.8) gameScale = 0.8; 
-        if (gameScale > 1.5) gameScale = 1.5; // iPad向けにスケールしすぎないよう制限（相対的に速く感じるように）
+        if (gameScale > 1.5) gameScale = 1.5; 
 
         CONFIG.gravity = BASE_CONFIG.gravity * gameScale;
         CONFIG.jumpStrength = BASE_CONFIG.jumpStrength * gameScale;
@@ -239,18 +232,14 @@
         }
         
         sakuraParticles = []; for(let i=0; i<30; i++) sakuraParticles.push(new Sakura());
-        
-        // 背景をキャッシュに描画（毎フレームの負荷を減らす）
         renderStaticBackground();
     }
     window.addEventListener('resize', resize);
 
-    // --- 静的背景の事前描画（高速化の肝） ---
     function renderStaticBackground() {
         const grad = bgCtx.createLinearGradient(0, 0, 0, height);
         grad.addColorStop(0, '#1a2a6c'); grad.addColorStop(0.6, '#b21f1f'); grad.addColorStop(1, '#fdbb2d');
         bgCtx.fillStyle = grad; bgCtx.fillRect(0, 0, width, height);
-        
         const mountainY = height - CONFIG.groundHeight;
         const fujiCenterX = width * 0.5; const fujiHeight = height * 0.35; const fujiWidth = width * 0.8;
         bgCtx.fillStyle = '#2c3e50'; 
@@ -272,13 +261,11 @@
         bgCtx.lineTo(width, mountainY); bgCtx.lineTo(0, mountainY); bgCtx.fill();
     }
 
-    function drawGround(dt) { // dt対応
+    function drawGround(dt) {
         const gh = CONFIG.groundHeight; const gy = height - gh;
         const waterGrad = ctx.createLinearGradient(0, gy, 0, height);
         waterGrad.addColorStop(0, '#3a5f78'); waterGrad.addColorStop(1, '#1b2a40');
         ctx.fillStyle = waterGrad; ctx.fillRect(0, gy, width, gh);
-        
-        // dtを使ってスクロール量を計算
         if (state === 'PLAYING') groundOffset = (groundOffset + (CONFIG.speed * 0.8) * dt) % (100 * gameScale);
         
         ctx.strokeStyle = 'rgba(255, 250, 240, 0.2)'; 
@@ -330,7 +317,6 @@
             ctx.restore();
         },
         update(dt) {
-            // dtを使った物理計算
             this.velocity += CONFIG.gravity * dt; 
             this.y += this.velocity * dt;
             if(this.y + this.r >= height - CONFIG.groundHeight) gameOver('water');
@@ -366,18 +352,35 @@
     const pipes = {
         items:[], reset(){this.items=[]},
         update(dt) {
-            // スポーンタイミングの管理（dtベース）
-            // ここは簡易的にフレームカウントのままにするが、移動はdtを使う
-            if(frames % CONFIG.pipeSpawnRate === 0){
+            // 出現管理用のカウンターを進める
+            // dtベースで管理すると正確だが、簡易的に移動量で判断
+            // 一定距離進んだら次を出すロジックに変更したほうがスケールフリーだが
+            // ここではシンプルにフレームカウントをdtで進める
+            
+            // 難易度調整: spawnRateをdtで割るわけにはいかないので、
+            // 前回のスポーン位置からの距離で判定するのがベスト
+            
+            // 一番後ろの土管の位置を取得
+            let lastX = width;
+            if (this.items.length > 0) {
+                lastX = this.items[this.items.length - 1].x;
+            }
+            
+            // 次の土管が出るべき位置（画面幅から逆算した間隔）
+            // spawnRate * speed ≒ 距離
+            const distance = CONFIG.pipeSpawnRate * (CONFIG.speed / 1.5); // 距離ベースに変換
+            
+            if (width - lastX >= distance) {
                 const groundY = height - CONFIG.groundHeight; 
                 const minH = 90 * gameScale; 
                 const maxH = groundY - CONFIG.pipeGap - minH;
                 const topH = Math.floor(Math.random() * (maxH - minH + 1) + minH);
                 this.items.push({x:width, w:CONFIG.pipeWidth, h:topH, passed:false});
             }
+
             for(let i=0; i<this.items.length; i++){
                 let p=this.items[i]; 
-                p.x -= CONFIG.speed * dt; // dt対応
+                p.x -= CONFIG.speed * dt; 
                 let bottomY = p.h + CONFIG.pipeGap;
                 
                 const padding = 15 * gameScale;
@@ -399,22 +402,15 @@
         }
     };
 
-    // --- メインループ (Delta Time 対応) ---
     function loop(timestamp) {
-        // Delta Time計算
         if (!lastTime) lastTime = timestamp;
         const deltaTimeMs = timestamp - lastTime;
         lastTime = timestamp;
-        
-        // 60FPSを基準(1.0)とした係数。120Hzなら0.5になる。
         const dt = deltaTimeMs / (1000 / 60);
 
-        // 描画
         ctx.clearRect(0, 0, width, height);
-        // 背景はキャッシュから描画（高速化）
         ctx.drawImage(bgCanvas, 0, 0);
         
-        // 桜は動かす
         sakuraParticles.forEach(p => { p.update(dt); p.draw(); });
 
         if(state==='PLAYING'){
@@ -424,7 +420,7 @@
         }
         
         pipes.draw(); 
-        drawGround(dt); // 地面もdt対応
+        drawGround(dt); 
         if(state!=='START') bird.draw();
         
         requestAnimationFrame(loop);
@@ -435,7 +431,7 @@
         score=0; scoreDisplay.innerText=score; scoreDisplay.style.display='block';
         startScreen.style.display='none'; resultScreen.style.display='none';
         frames=0; resumeAudio(); sakuraParticles.forEach(p=>p.reset());
-        lastTime = 0; // タイマーリセット
+        lastTime = 0; 
     }
     
     function gameOver(cause) {
@@ -461,10 +457,9 @@
     retryBtn.addEventListener('click',startGame); retryBtn.addEventListener('touchstart',e=>{e.stopPropagation();startGame();});
     window.addEventListener('touchstart',onInput,{passive:false}); window.addEventListener('mousedown',onInput); window.addEventListener('keydown',e=>{if(e.code==='Space')onInput(e);});
     
-    // 初回実行
     resize(); 
     bird.x=width*0.3; 
-    requestAnimationFrame(loop); // loop開始
+    requestAnimationFrame(loop);
 </script>
 </body>
 </html>
