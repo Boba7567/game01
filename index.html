@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>鳥居くぐり</title>
+    <link href="https://fonts.googleapis.com/css2?family=Sawarabi+Mincho&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --japan-blue: #2c3e50;
+            --japan-red: #c0392b;
+            --japan-white: #fffaf0;
+            --japan-cream: #fceebb;
+            --japan-shadow: rgba(0, 0, 0, 0.3);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: var(--japan-blue);
+            touch-action: none;
+            font-family: 'Sawarabi Mincho', serif;
+            -webkit-user-select: none;
+            color: #fff;
+        }
+
+        #game-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #score-display {
+            margin-top: 10vh;
+            font-size: 4rem;
+            font-weight: bold;
+            color: var(--japan-cream);
+            text-shadow: 3px 3px 0 #8e44ad;
+        }
+
+        .panel {
+            background-color: var(--japan-white);
+            border: 6px double var(--japan-red);
+            padding: 30px 40px;
+            text-align: center;
+            border-radius: 8px;
+            pointer-events: auto;
+            box-shadow: 0 10px 20px var(--japan-shadow);
+            color: var(--japan-blue);
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            min-width: 260px;
+        }
+
+        #start-screen h1 {
+            font-size: 2.5rem;
+            color: var(--japan-red);
+            margin: 0 0 15px 0;
+            letter-spacing: 0.1em;
+        }
+
+        #start-screen p {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin: 8px 0;
+        }
+
+        #result-screen {
+            display: none;
+        }
+
+        .score-val {
+            font-size: 1.5rem;
+            color: var(--japan-red);
+        }
+
+        .btn {
+            background: var(--japan-red);
+            color: var(--japan-white);
+            border: none;
+            padding: 12px 30px;
+            font-size: 1.3rem;
+            font-family: 'Sawarabi Mincho', serif;
+            cursor: pointer;
+            margin-top: 20px;
+            border-radius: 4px;
+            box-shadow: 0 4px #922b21;
+            transition: transform 0.1s, box-shadow 0.1s;
+        }
+
+        .btn:active {
+            transform: translateY(4px);
+            box-shadow: 0 0 #922b21;
+        }
+
+        #new-record {
+            display: none;
+            color: #d35400;
+            font-size: 1rem;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui-layer">
+            <div id="score-display">0</div>
+            <div id="start-screen" class="panel">
+                <h1>鳥居くぐり</h1>
+                <p>画面をタップして飛ぶ</p>
+            </div>
+            <div id="result-screen" class="panel">
+                <div id="new-record">祝！新記録達成</div>
+                <h1>終劇</h1>
+                <p>記録: <span id="final-score" class="score-val">0</span></p>
+                <p>最高記録: <span id="best-score" class="score-val">0</span></p>
+                <button id="retry-btn" class="btn">もう一度！</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 音響設定 (Web Audio API) ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function resumeAudio() { if (audioCtx.state === 'suspended') audioCtx.resume(); }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+            const now = audioCtx.currentTime;
+            const masterGain = audioCtx.createGain();
+            masterGain.connect(audioCtx.destination);
+
+            if (type === 'jump') {
+                // 羽音（バサッ）
+                const bufferSize = audioCtx.sampleRate * 0.2;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+                const noise = audioCtx.createBufferSource(); noise.buffer = buffer;
+                const filter = audioCtx.createBiquadFilter(); filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(800, now); filter.frequency.linearRampToValueAtTime(100, now + 0.2);
+                noise.connect(filter); filter.connect(masterGain);
+                masterGain.gain.setValueAtTime(0, now); masterGain.gain.linearRampToValueAtTime(0.6, now + 0.02);
+                masterGain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+                noise.start(now); noise.stop(now + 0.2);
+
+            } else if (type === 'score') {
+                // 小鼓（ポンッ）
+                const osc = audioCtx.createOscillator(); osc.type = 'sine';
+                osc.frequency.setValueAtTime(450, now); osc.frequency.exponentialRampToValueAtTime(600, now + 0.05);
+                osc.frequency.exponentialRampToValueAtTime(300, now + 0.2);
+                const clickOsc = audioCtx.createOscillator(); clickOsc.type = 'square'; clickOsc.frequency.value = 200;
+                const clickGain = audioCtx.createGain(); clickGain.gain.setValueAtTime(0.2, now);
+                clickGain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+                osc.connect(masterGain); clickOsc.connect(clickGain); clickGain.connect(masterGain);
+                masterGain.gain.setValueAtTime(0, now); masterGain.gain.linearRampToValueAtTime(0.8, now + 0.01);
+                masterGain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+                osc.start(now); osc.stop(now + 0.25); clickOsc.start(now); clickOsc.stop(now + 0.1);
+
+            } else if (type === 'highscore') {
+                // 琴（ジャラララ〜ン）
+                const pentatonic = [523.25, 587.33, 659.25, 783.99, 880.00, 1046.50, 1174.66, 1318.51, 1567.98];
+                pentatonic.forEach((freq, i) => {
+                    const startTime = now + i * 0.06; const osc = audioCtx.createOscillator(); osc.type = 'triangle'; osc.frequency.value = freq;
+                    const noteGain = audioCtx.createGain(); noteGain.connect(masterGain);
+                    noteGain.gain.setValueAtTime(0, startTime); noteGain.gain.linearRampToValueAtTime(0.3, startTime + 0.05);
+                    noteGain.gain.exponentialRampToValueAtTime(0.001, startTime + 1.5);
+                    osc.connect(noteGain); osc.start(startTime); osc.stop(startTime + 1.5);
+                });
+                masterGain.gain.value = 1.0;
+
+            } else if (type === 'hit') {
+                // 梵鐘（ゴォォン…）
+                masterGain.gain.setValueAtTime(0.5, now); masterGain.gain.exponentialRampToValueAtTime(0.001, now + 4.0);
+                const baseFreq = 160; const harmonics = [1, 1.3, 1.7, 2.5, 3.8]; const gains = [1, 0.6, 0.4, 0.2, 0.1];
+                harmonics.forEach((h, i) => {
+                    const osc = audioCtx.createOscillator(); osc.type = i === 0 ? 'sine' : 'triangle';
+                    osc.frequency.value = baseFreq * h; if (i > 0) osc.detune.value = Math.random() * 10 - 5;
+                    const oscGain = audioCtx.createGain(); oscGain.gain.value = gains[i];
+                    osc.connect(oscGain); oscGain.connect(masterGain); osc.start(now); osc.stop(now + 4.0);
+                });
+
+            } else if (type === 'splash') {
+                // 【再調整】水音（バシャァ！）
+                // 音を大きく、よりノイズ感を強くして聞こえやすく
+                const bufferSize = audioCtx.sampleRate * 0.4;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * 0.8;
+
+                const noise = audioCtx.createBufferSource(); noise.buffer = buffer;
+                const filter = audioCtx.createBiquadFilter(); filter.type = 'lowpass';
+
+                // フィルターを開き気味にして「バシャッ」という高音成分を残す
+                filter.frequency.setValueAtTime(1200, now);
+                filter.frequency.exponentialRampToValueAtTime(200, now + 0.3);
+
+                const gain = audioCtx.createGain();
+                // 音量Maxを1.0に設定（しっかり鳴らす）
+                gain.gain.setValueAtTime(0, now);
+                gain.gain.linearRampToValueAtTime(1.0, now + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+
+                noise.connect(filter); filter.connect(gain); gain.connect(masterGain);
+                noise.start(now);
+            }
+        }
+
+        // --- ゲーム設定 ---
+        const CONFIG = {
+            gravity: 0.6, jumpStrength: -9, speed: 3,
+            pipeSpawnRate: 140, pipeGap: 190, groundHeight: 0
+        };
+
+        const canvas = document.getElementById('gameCanvas'); const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('score-display'); const startScreen = document.getElementById('start-screen');
+        const resultScreen = document.getElementById('result-screen'); const finalScoreEl = document.getElementById('final-score');
+        const bestScoreEl = document.getElementById('best-score'); const newRecordEl = document.getElementById('new-record');
+        const retryBtn = document.getElementById('retry-btn');
+        let frames = 0, score = 0, state = 'START', width, height;
+        let bestScore = localStorage.getItem('flappyTanchoBest') || 0;
+        let groundOffset = 0; let sakuraParticles = [];
+
+        class Sakura {
+            constructor() { this.reset(); }
+            reset() {
+                this.x = Math.random() * width; this.y = -10; this.size = Math.random() * 5 + 3;
+                this.speedX = Math.random() - 0.5; this.speedY = Math.random() + 0.5;
+                this.rotation = Math.random() * Math.PI * 2; this.rotationSpeed = Math.random() * 0.05 - 0.025;
+            }
+            update() {
+                this.x += this.speedX; this.y += this.speedY; this.rotation += this.rotationSpeed;
+                if (this.y > height) this.reset();
+            }
+            draw() {
+                ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(this.rotation);
+                ctx.fillStyle = 'rgba(255, 183, 197, 0.8)'; ctx.beginPath();
+                ctx.ellipse(0, 0, this.size, this.size / 2, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+            }
+        }
+
+        let bird;
+        function resize() {
+            width = window.innerWidth; height = window.innerHeight;
+            canvas.width = width; canvas.height = height;
+            CONFIG.groundHeight = height * 0.15;
+            if (bird) bird.x = width * 0.3;
+            sakuraParticles = []; for (let i = 0; i < 30; i++) sakuraParticles.push(new Sakura());
+        }
+        window.addEventListener('resize', resize);
+
+        // --- 描画関数 ---
+        function drawBackground() {
+            const grad = ctx.createLinearGradient(0, 0, 0, height);
+            grad.addColorStop(0, '#1a2a6c'); grad.addColorStop(0.6, '#b21f1f'); grad.addColorStop(1, '#fdbb2d');
+            ctx.fillStyle = grad; ctx.fillRect(0, 0, width, height);
+            const mountainY = height - CONFIG.groundHeight;
+            const fujiCenterX = width * 0.5; const fujiHeight = height * 0.35; const fujiWidth = width * 0.8;
+            ctx.fillStyle = '#2c3e50';
+            ctx.beginPath(); ctx.moveTo(fujiCenterX - fujiWidth / 2, mountainY);
+            ctx.bezierCurveTo(fujiCenterX - fujiWidth / 4, mountainY - fujiHeight * 0.5, fujiCenterX, mountainY - fujiHeight, fujiCenterX, mountainY - fujiHeight);
+            ctx.bezierCurveTo(fujiCenterX, mountainY - fujiHeight, fujiCenterX + fujiWidth / 4, mountainY - fujiHeight * 0.5, fujiCenterX + fujiWidth / 2, mountainY);
+            ctx.closePath(); ctx.fill();
+            ctx.fillStyle = '#fffaf0';
+            ctx.beginPath(); ctx.moveTo(fujiCenterX, mountainY - fujiHeight);
+            ctx.lineTo(fujiCenterX + fujiWidth * 0.1, mountainY - fujiHeight * 0.8);
+            ctx.lineTo(fujiCenterX + fujiWidth * 0.05, mountainY - fujiHeight * 0.75);
+            ctx.lineTo(fujiCenterX, mountainY - fujiHeight * 0.85);
+            ctx.lineTo(fujiCenterX - fujiWidth * 0.05, mountainY - fujiHeight * 0.75);
+            ctx.lineTo(fujiCenterX - fujiWidth * 0.1, mountainY - fujiHeight * 0.8);
+            ctx.closePath(); ctx.fill();
+            ctx.fillStyle = 'rgba(255, 250, 240, 0.3)';
+            ctx.beginPath(); ctx.moveTo(0, mountainY - 50);
+            ctx.bezierCurveTo(width / 3, mountainY - 100, width * 2 / 3, mountainY, width, mountainY - 50);
+            ctx.lineTo(width, mountainY); ctx.lineTo(0, mountainY); ctx.fill();
+            sakuraParticles.forEach(p => { p.update(); p.draw(); });
+        }
+
+        function drawGround() {
+            const gh = CONFIG.groundHeight; const gy = height - gh;
+            const waterGrad = ctx.createLinearGradient(0, gy, 0, height);
+            waterGrad.addColorStop(0, '#3a5f78'); waterGrad.addColorStop(1, '#1b2a40');
+            ctx.fillStyle = waterGrad; ctx.fillRect(0, gy, width, gh);
+            if (state === 'PLAYING') groundOffset = (groundOffset + CONFIG.speed * 0.8) % 100;
+            ctx.strokeStyle = 'rgba(255, 250, 240, 0.2)'; ctx.lineWidth = 2; ctx.beginPath();
+            for (let y = gy + 10; y < height; y += 20) {
+                for (let x = -groundOffset; x < width; x += 100) {
+                    ctx.moveTo(x, y); ctx.quadraticCurveTo(x + 30, y - 5, x + 50, y); ctx.quadraticCurveTo(x + 70, y + 5, x + 100, y);
+                }
+            }
+            ctx.stroke();
+            ctx.fillStyle = '#fceebb';
+            const speckCount = Math.floor(width / 30);
+            for (let i = 0; i < speckCount; i++) {
+                let sx = (i * 1234 + groundOffset * 0.5) % width; let sy = gy + (i * 5678) % gh;
+                let size = (i % 3) + 1; ctx.fillRect(sx, sy, size, size);
+            }
+            ctx.fillStyle = '#fffaf0'; ctx.fillRect(0, gy, width, 3);
+        }
+
+        bird = {
+            x: 0, y: 200, size: 20, velocity: 0, r: 15,
+            draw() {
+                let rotation = Math.min(Math.PI / 4, Math.max(-Math.PI / 4, (this.velocity * 0.08)));
+                ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(rotation);
+                const bodyWhite = '#fffaf0'; const featherBlack = '#2c3e50'; const headRed = '#c0392b';
+                ctx.fillStyle = bodyWhite; ctx.beginPath();
+                ctx.moveTo(5, 0); ctx.quadraticCurveTo(-10, -20, -25, -5); ctx.quadraticCurveTo(-15, -5, -5, 5); ctx.fill();
+                ctx.fillStyle = featherBlack; ctx.beginPath();
+                ctx.moveTo(-15, -12); ctx.quadraticCurveTo(-25, -5, -18, -2); ctx.fill();
+                ctx.fillStyle = bodyWhite; ctx.beginPath(); ctx.ellipse(0, 5, 15, 8, 0, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.moveTo(10, 5); ctx.quadraticCurveTo(20, 0, 25, -10); ctx.lineTo(32, -8); ctx.lineTo(28, -15); ctx.lineTo(22, -12); ctx.fill();
+                ctx.fillStyle = featherBlack; ctx.beginPath(); ctx.moveTo(15, 2); ctx.quadraticCurveTo(20, -5, 22, -12); ctx.lineTo(18, -10); ctx.quadraticCurveTo(15, -2, 12, 5); ctx.fill();
+                ctx.fillStyle = headRed; ctx.beginPath(); ctx.arc(28, -14, 2.5, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = bodyWhite; ctx.beginPath();
+                if (this.velocity < 0) { ctx.moveTo(5, 5); ctx.quadraticCurveTo(-10, 25, -25, 15); ctx.quadraticCurveTo(-15, 10, -5, 10); }
+                else { ctx.moveTo(5, 5); ctx.quadraticCurveTo(-15, 5, -30, 0); ctx.quadraticCurveTo(-15, 0, -5, 8); }
+                ctx.fill();
+                ctx.fillStyle = featherBlack; ctx.beginPath();
+                if (this.velocity < 0) { ctx.moveTo(-15, 18); ctx.quadraticCurveTo(-25, 15, -20, 10); }
+                else { ctx.moveTo(-20, 3); ctx.quadraticCurveTo(-30, 0, -22, -2); }
+                ctx.fill();
+                ctx.restore();
+            },
+            update() {
+                this.velocity += CONFIG.gravity; this.y += this.velocity;
+                // 水面落下時の判定
+                if (this.y + this.r >= height - CONFIG.groundHeight) gameOver('water');
+            },
+            jump() { this.velocity = CONFIG.jumpStrength; playSound('jump'); }
+        };
+
+        function drawTorii(x, y, w, h, isTop) {
+            const redDark = '#922b21', redLight = '#c0392b', black = '#2c3e50';
+            const pillarGrad = ctx.createLinearGradient(x, 0, x + 15, 0);
+            pillarGrad.addColorStop(0, redDark); pillarGrad.addColorStop(0.5, redLight); pillarGrad.addColorStop(1, redDark);
+            ctx.fillStyle = pillarGrad; ctx.fillRect(x + 10, y, 15, h);
+            const pillarGradRight = ctx.createLinearGradient(x + w - 25, 0, x + w - 10, 0);
+            pillarGradRight.addColorStop(0, redDark); pillarGradRight.addColorStop(0.5, redLight); pillarGradRight.addColorStop(1, redDark);
+            ctx.fillStyle = pillarGradRight; ctx.fillRect(x + w - 25, y, 15, h);
+            const crossBarY = isTop ? h - 45 : y + 25;
+            const kasagiGrad = ctx.createLinearGradient(0, crossBarY - 20, 0, crossBarY);
+            kasagiGrad.addColorStop(0, redLight); kasagiGrad.addColorStop(1, redDark);
+            ctx.fillStyle = kasagiGrad; ctx.beginPath(); ctx.moveTo(x - 5, crossBarY);
+            ctx.bezierCurveTo(x + w / 2, crossBarY + 15, x + w / 2, crossBarY + 15, x + w + 5, crossBarY);
+            ctx.lineTo(x + w + 10, crossBarY - 20);
+            ctx.bezierCurveTo(x + w / 2, crossBarY - 5, x + w / 2, crossBarY - 5, x - 10, crossBarY - 20);
+            ctx.closePath(); ctx.fill();
+            ctx.fillStyle = redLight; ctx.fillRect(x + 5, crossBarY + 25, w - 10, 12);
+            ctx.fillStyle = black; ctx.fillRect(x + w / 2 - 6, crossBarY + 5, 12, 20);
+        }
+
+        const pipes = {
+            items: [], reset() { this.items = [] },
+            update() {
+                if (frames % CONFIG.pipeSpawnRate === 0) {
+                    const groundY = height - CONFIG.groundHeight; const minH = 90; const maxH = groundY - CONFIG.pipeGap - minH;
+                    this.items.push({ x: width, w: 70, h: Math.floor(Math.random() * (maxH - minH + 1) + minH), passed: false });
+                }
+                for (let i = 0; i < this.items.length; i++) {
+                    let p = this.items[i]; p.x -= CONFIG.speed; let bottomY = p.h + CONFIG.pipeGap;
+                    // 鳥居衝突時の判定
+                    if (bird.x + bird.r > p.x + 15 && bird.x - bird.r < p.x + p.w - 15 && (bird.y - bird.r < p.h || bird.y + bird.r > bottomY)) gameOver('hit');
+                    if (p.x + p.w < bird.x && !p.passed) { score++; scoreDisplay.innerText = score; p.passed = true; playSound('score'); }
+                }
+                if (this.items.length > 0 && this.items[0].x < -150) this.items.shift();
+            },
+            draw() {
+                for (let p of this.items) {
+                    let by = p.h + CONFIG.pipeGap; let gy = height - CONFIG.groundHeight;
+                    drawTorii(p.x, 0, p.w, p.h, true); drawTorii(p.x, by, p.w, gy - by, false);
+                }
+            }
+        };
+
+        function loop() {
+            ctx.clearRect(0, 0, width, height); drawBackground();
+            if (state === 'PLAYING') { pipes.update(); bird.update(); frames++; }
+            pipes.draw(); drawGround(); if (state !== 'START') bird.draw();
+            requestAnimationFrame(loop);
+        }
+        function startGame() {
+            state = 'PLAYING'; bird.y = height / 3; bird.velocity = 0; pipes.reset();
+            score = 0; scoreDisplay.innerText = score; scoreDisplay.style.display = 'block';
+            startScreen.style.display = 'none'; resultScreen.style.display = 'none';
+            frames = 0; resumeAudio(); sakuraParticles.forEach(p => p.reset());
+        }
+
+        // 引数causeを受け取って音を分岐
+        function gameOver(cause) {
+            if (state !== 'GAMEOVER') {
+                state = 'GAMEOVER';
+                let isNew = false;
+                if (score > bestScore) {
+                    bestScore = score; localStorage.setItem('flappyTanchoBest', bestScore); isNew = true;
+                }
+
+                // 音の出し分けロジック
+                if (isNew && score > 0) {
+                    playSound('highscore'); // ハイスコア優先
+                } else {
+                    // 通常のゲームオーバーはまず鐘を鳴らす
+                    playSound('hit');
+                    // 水落下なら、追加で水音も鳴らす（少し遅らせて被らないように）
+                    if (cause === 'water') {
+                        setTimeout(() => { playSound('splash'); }, 100);
+                    }
+                }
+
+                scoreDisplay.style.display = 'none'; finalScoreEl.innerText = score; bestScoreEl.innerText = bestScore;
+                newRecordEl.style.display = isNew ? 'block' : 'none'; resultScreen.style.display = 'block';
+            }
+        }
+        function onInput(e) { if (e.target.closest('.btn')) return; if (e.cancelable) e.preventDefault(); if (state === 'START') startGame(); else if (state === 'PLAYING') bird.jump(); }
+        retryBtn.addEventListener('click', startGame); retryBtn.addEventListener('touchstart', e => { e.stopPropagation(); startGame(); });
+        window.addEventListener('touchstart', onInput, { passive: false }); window.addEventListener('mousedown', onInput); window.addEventListener('keydown', e => { if (e.code === 'Space') onInput(e); });
+        resize(); bird.x = width * 0.3; loop();
+    </script>
+</body>
+
+</html>
